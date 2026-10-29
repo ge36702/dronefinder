@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DroneFinder — Find your way back</title>
+  <meta name="description" content="Drone registration and lost-drone recovery prototype.">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>
+    :root { --ink:#172033; --muted:#64748b; --brand:#2563eb; --brand-dark:#1d4ed8; --bg:#f4f7fb; --card:#fff; --line:#e2e8f0; --green:#15803d; --red:#b91c1c; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--ink); }
+    header { background:#0f172a; color:white; padding:22px max(20px,calc((100% - 1120px)/2)); display:flex; justify-content:space-between; align-items:center; gap:20px; flex-wrap:wrap; }
+    .brand { font-size:1.35rem; font-weight:800; letter-spacing:-.03em; }
+    .brand span { color:#93c5fd; }
+    header p { margin:5px 0 0; color:#cbd5e1; font-size:.9rem; }
+    main { max-width:1120px; margin:28px auto; padding:0 18px 36px; }
+    .notice { background:#eff6ff; border:1px solid #bfdbfe; border-radius:12px; padding:14px 16px; color:#1e3a8a; line-height:1.5; margin-bottom:22px; }
+    .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:22px; box-shadow:0 5px 18px #0f172a08; }
+    .card h2 { margin:0 0 8px; font-size:1.1rem; }
+    .sub { color:var(--muted); font-size:.92rem; line-height:1.5; margin:0 0 18px; }
+    label { display:block; font-size:.9rem; font-weight:650; margin:12px 0 6px; }
+    input, select { width:100%; border:1px solid #cbd5e1; border-radius:9px; padding:11px 12px; font:inherit; background:white; color:var(--ink); }
+    input:focus,select:focus { outline:3px solid #bfdbfe; border-color:var(--brand); }
+    button { border:0; border-radius:9px; background:var(--brand); color:white; font:inherit; font-weight:700; padding:11px 14px; cursor:pointer; margin-top:14px; }
+    button:hover { background:var(--brand-dark); }
+    button.secondary { background:#e2e8f0; color:#172033; }
+    button.secondary:hover { background:#cbd5e1; }
+    button.danger { background:#b91c1c; }
+    .row { display:flex; gap:10px; align-items:center; }
+    .row > * { flex:1; }
+    .result { margin-top:14px; padding:12px; border-radius:10px; background:#f8fafc; border:1px solid var(--line); overflow-wrap:anywhere; line-height:1.5; }
+    .hidden { display:none !important; }
+    .badge { display:inline-block; padding:4px 9px; border-radius:999px; font-size:.78rem; font-weight:800; background:#dcfce7; color:#166534; }
+    .badge.lost { background:#fee2e2; color:#991b1b; }
+    #map { height:360px; width:100%; border-radius:12px; border:1px solid var(--line); margin-top:12px; }
+    .map-card { margin-top:18px; }
+    .small { font-size:.82rem; color:var(--muted); line-height:1.5; }
+    .drone-list { display:grid; gap:10px; margin-top:12px; }
+    .drone-item { border:1px solid var(--line); border-radius:10px; padding:12px; display:flex; justify-content:space-between; gap:10px; align-items:center; }
+    .drone-item strong { display:block; }
+    footer { text-align:center; padding:20px; color:var(--muted); font-size:.82rem; }
+    @media (max-width:760px) { .grid { grid-template-columns:1fr; } header { align-items:flex-start; } .card { padding:18px; } .row { flex-direction:column; align-items:stretch; gap:0; } #map { height:300px; } }
+  </style>
+</head>
+<body>
+<header>
+  <div>
+    <div class="brand">Drone<span>Finder</span></div>
+    <p>Drone registration and recovery — prototype</p>
+  </div>
+  <div class="small" style="color:#cbd5e1">Demo mode · Data stays in this browser</div>
+</header>
+
+<main>
+  <div class="notice">
+    <strong>Prototype limitation:</strong> a drone ID does not reveal its GPS position. This demo can save a location you enter and can show your phone/browser's location with permission. Live drone tracking requires a compatible tracker or an authorized drone-location integration.
+  </div>
+
+  <div class="grid">
+    <section class="card">
+      <h2>1. Register a drone</h2>
+      <p class="sub">Create a demo record and generate a unique DroneFinder ID.</p>
+      <form id="registerForm">
+        <label for="owner">Owner name</label>
+        <input id="owner" required minlength="2" maxlength="100" placeholder="e.g. Alex" autocomplete="name">
+        <label for="model">Drone make/model</label>
+        <input id="model" required maxlength="100" placeholder="e.g. Example Drone X">
+        <label for="serial">Manufacturer serial number (optional)</label>
+        <input id="serial" maxlength="100" placeholder="Do not enter sensitive information">
+        <button type="submit">Register drone</button>
+      </form>
+      <div id="registerResult" class="result hidden" aria-live="polite"></div>
+    </section>
+
+    <section class="card">
+      <h2>2. Find a registered drone</h2>
+      <p class="sub">Search using the DroneFinder ID printed on the label or QR code.</p>
+      <form id="searchForm">
+        <label for="searchId">DroneFinder ID</label>
+        <input id="searchId" required placeholder="e.g. DF-1A2B3C4D" autocomplete="off">
+        <button type="submit">Search drone</button>
+      </form>
+      <div id="searchResult" class="result hidden" aria-live="polite"></div>
+    </section>
+
+    <section class="card">
+      <h2>3. Report a drone as lost</h2>
+      <p class="sub">Mark a drone as lost using its DroneFinder ID.</p>
+      <form id="lostForm">
+        <label for="lostId">DroneFinder ID</label>
+        <input id="lostId" required placeholder="e.g. DF-1A2B3C4D">
+        <button type="submit" class="danger">Report lost</button>
+      </form>
+      <div id="lostResult" class="result hidden" aria-live="polite"></div>
+    </section>
+
+    <section class="card">
+      <h2>4. Update a drone's known location</h2>
+      <p class="sub">For this demo, enter coordinates obtained from a real, authorized source. This does not automatically connect to a drone.</p>
+      <form id="locationForm">
+        <label for="locationId">DroneFinder ID</label>
+        <input id="locationId" required placeholder="e.g. DF-1A2B3C4D">
+        <div class="row">
+          <div><label for="lat">Latitude</label><input id="lat" required type="number" step="any" min="-90" max="90" placeholder="47.4979"></div>
+          <div><label for="lon">Longitude</label><input id="lon" required type="number" step="any" min="-180" max="180" placeholder="19.0402"></div>
+        </div>
+        <button type="submit">Save known location</button>
+        <button type="button" class="secondary" id="phoneLocationBtn">Use my phone's location</button>
+      </form>
+      <div id="locationResult" class="result hidden" aria-live="polite"></div>
+      <p class="small">“Use my phone's location” records where your phone is, not where the drone is. It can be useful for logging where a searcher is standing.</p>
+    </section>
+  </div>
+
+  <section class="card map-card">
+    <h2>Map and registered drones</h2>
+    <p class="sub">Choose a drone to center the map on its saved coordinates. Locations are only as current as their last update.</p>
+    <div class="row">
+      <div>
+        <label for="mapDrone">Choose a drone</label>
+        <select id="mapDrone"><option value="">No drones registered yet</option></select>
+      </div>
+      <div style="flex:0 0 auto;align-self:end"><button type="button" class="secondary" id="refreshBtn">Refresh list</button></div>
+    </div>
+    <div id="mapStatus" class="small" aria-live="polite" style="margin-top:10px">Map loading…</div>
+    <div id="map"></div>
+    <div id="droneList" class="drone-list"></div>
+  </section>
+  <p class="small" style="margin-top:18px">Privacy reminder: this demo stores data only in this browser. Do not use it for real owners or live locations. A production service needs accounts, authorization, secure APIs, a server database, and safeguards against exposing a drone owner's location.</p>
+</main>
+<footer>DroneFinder concept demo · Not connected to real drones or tracking hardware</footer>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(() => {
+  const STORAGE_KEY = "dronefinder_demo_v1";
+  const $ = (id) => document.getElementById(id);
+  let map, markers = [];
+
+  function loadDrones() {
+    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); }
+    catch { return []; }
+  }
+  function saveDrones(drones) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(drones));
+  }
+  function makeId() {
+    let id;
+    const drones = loadDrones();
+    do {
+      id = "DF-" + Math.random().toString(36).slice(2, 10).toUpperCase();
+    } while (drones.some(d => d.id === id));
+    return id;
+  }
+  function show(id, html, isError = false) {
+    const el = $(id);
+    el.innerHTML = html;
+    el.classList.remove("hidden");
+    el.style.background = isError ? "#fef2f2" : "#f8fafc";
+    el.style.borderColor = isError ? "#fecaca" : "#e2e8f0";
+  }
+  function escapeHtml(value) {
+    return String(value ?? "").replace(/[&<>"']/g, c => ({
+      "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"
+    })[c]);
+  }
+  function findDrone(id) {
+    return loadDrones().find(d => d.id.toUpperCase() === id.trim().toUpperCase());
+  }
+  function formatDate(value) {
+    if (!value) return "No location saved yet";
+    return new Date(value).toLocaleString();
+  }
+  function renderDetails(d) {
+    const status = d.status === "lost"
+      ? '<span class="badge lost">Reported lost</span>'
+      : '<span class="badge">Active</span>';
+    let location = "No known location has been saved.";
+    if (Number.isFinite(d.lat) && Number.isFinite(d.lon)) {
+      location = `Last saved location: ${d.lat.toFixed(5)}, ${d.lon.toFixed(5)}<br>Updated: ${escapeHtml(formatDate(d.locationUpdated))}`;
+    }
+    return `<strong>${escapeHtml(d.id)}</strong> — ${escapeHtml(d.model)}<br>
+      ${status}<br>Owner: ${escapeHtml(d.owner)}<br>${location}`;
+  }
+
+  $("registerForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const drone = {
+      id: makeId(),
+      owner: $("owner").value.trim(),
+      model: $("model").value.trim(),
+      serial: $("serial").value.trim(),
+      status: "active",
+      lat: null,
+      lon: null,
+      locationUpdated: null,
+      createdAt: new Date().toISOString()
+    };
+    const drones = loadDrones();
+    drones.push(drone);
+    saveDrones(drones);
+    show("registerResult", `<strong>Drone registered.</strong><br>Your DroneFinder ID is <strong>${escapeHtml(drone.id)}</strong>.<br>Write this ID on the label or use it to create a QR code later.<br><br>${renderDetails(drone)}`);
+    $("searchId").value = drone.id;
+    $("lostId").value = drone.id;
+    $("locationId").value = drone.id;
+    event.target.reset();
+    refreshDrones(drone.id);
+  });
+
+  $("searchForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const d = findDrone($("searchId").value);
+    if (!d) return show("searchResult", "No drone found. Check the ID and try again.", true);
+    show("searchResult", renderDetails(d));
+    if (Number.isFinite(d.lat) && Number.isFinite(d.lon)) centerMap(d);
+  });
+
+  $("lostForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const drones = loadDrones();
+    const d = drones.find(x => x.id.toUpperCase() === $("lostId").value.trim().toUpperCase());
+    if (!d) return show("lostResult", "No drone found. Check the ID and try again.", true);
+    d.status = "lost";
+    saveDrones(drones);
+    show("lostResult", `${escapeHtml(d.id)} has been marked as lost in this demo.`);
+    refreshDrones(d.id);
+  });
+
+  $("locationForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const id = $("locationId").value.trim();
+    const lat = Number($("lat").value);
+    const lon = Number($("lon").value);
+    const drones = loadDrones();
+    const d = drones.find(x => x.id.toUpperCase() === id.toUpperCase());
+    if (!d) return show("locationResult", "No drone found. Register it first or check the ID.", true);
+    if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lon) || lon < -180 || lon > 180) {
+      return show("locationResult", "Enter a valid latitude and longitude.", true);
+    }
+    d.lat = lat; d.lon = lon; d.locationUpdated = new Date().toISOString();
+    saveDrones(drones);
+    show("locationResult", `Saved coordinates for ${escapeHtml(d.id)}. Remember: these coordinates are only useful if they came from the drone or another trusted location source.`);
+    refreshDrones(d.id);
+    centerMap(d);
+  });
+
+  $("phoneLocationBtn").addEventListener("click", () => {
+    if (!navigator.geolocation) {
+      return show("locationResult", "This browser does not support geolocation.", true);
+    }
+    $("phoneLocationBtn").disabled = true;
+    $("phoneLocationBtn").textContent = "Getting location…";
+    navigator.geolocation.getCurrentPosition(
+      position => {
+        $("lat").value = position.coords.latitude.toFixed(6);
+        $("lon").value = position.coords.longitude.toFixed(6);
+        $("phoneLocationBtn").disabled = false;
+        $("phoneLocationBtn").textContent = "Use my phone's location";
+        show("locationResult", "Your phone's coordinates were filled in. Submit “Save known location” if you want to save them. These are your phone's coordinates, not the drone's.");
+      },
+      error => {
+        $("phoneLocationBtn").disabled = false;
+        $("phoneLocationBtn").textContent = "Use my phone's location";
+        const message = error.code === 1 ? "Location permission was denied. Allow location access in your browser if you want to use this feature." : "Could not get your location. Try again in a place with better GPS reception.";
+        show("locationResult", message, true);
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+    );
+  });
+
+  function centerMap(d) {
+    if (!map || !Number.isFinite(d.lat) || !Number.isFinite(d.lon)) return;
+    map.setView([d.lat, d.lon], 14);
+    L.popup().setLatLng([d.lat, d.lon]).setContent(`<strong>${escapeHtml(d.id)}</strong><br>${escapeHtml(d.model)}<br>Last update: ${escapeHtml(formatDate(d.locationUpdated))}`).openOn(map);
+  }
+
+  function refreshDrones(selectedId = "") {
+    const drones = loadDrones();
+    const select = $("mapDrone");
+    select.innerHTML = "";
+    if (!drones.length) {
+      select.add(new Option("No drones registered yet", ""));
+    } else {
+      select.add(new Option("Select a drone…", ""));
+      drones.forEach(d => select.add(new Option(`${d.id} — ${d.model}`, d.id)));
+      if (selectedId) select.value = selectedId;
+    }
+
+    $("droneList").innerHTML = drones.length ? drones.map(d => `
+      <div class="drone-item">
+        <div><strong>${escapeHtml(d.id)} · ${escapeHtml(d.model)}</strong>
+        <span class="small">${escapeHtml(d.owner)} · ${d.status === "lost" ? "Reported lost" : "Active"} · ${escapeHtml(formatDate(d.locationUpdated))}</span></div>
+        <button type="button" class="secondary" data-show="${escapeHtml(d.id)}">Show on map</button>
+      </div>`).join("") : '<p class="small">No drones registered yet. Register a demo drone above.</p>';
+
+    $("droneList").querySelectorAll("[data-show]").forEach(btn => btn.addEventListener("click", () => {
+      const d = findDrone(btn.dataset.show);
+      if (d && Number.isFinite(d.lat) && Number.isFinite(d.lon)) centerMap(d);
+      else $("mapStatus").textContent = `${d.id} has no saved coordinates yet.`;
+    }));
+
+    if (map) {
+      markers.forEach(marker => marker.remove());
+      markers = [];
+      drones.forEach(d => {
+        if (Number.isFinite(d.lat) && Number.isFinite(d.lon)) {
+          const marker = L.marker([d.lat, d.lon]).addTo(map)
+            .bindPopup(`<strong>${escapeHtml(d.id)}</strong><br>${escapeHtml(d.model)}<br>Status: ${escapeHtml(d.status)}<br>Updated: ${escapeHtml(formatDate(d.locationUpdated))}`);
+          markers.push(marker);
+        }
+      });
+    }
+    $("mapStatus").textContent = `${drones.length} demo drone(s) registered. Only drones with saved coordinates appear as markers.`;
+  }
+
+  $("mapDrone").addEventListener("change", () => {
+    const d = findDrone($("mapDrone").value);
+    if (!d) return;
+    if (Number.isFinite(d.lat) && Number.isFinite(d.lon)) centerMap(d);
+    else $("mapStatus").textContent = `${d.id} has no saved coordinates yet.`;
+  });
+  $("refreshBtn").addEventListener("click", () => refreshDrones($("mapDrone").value));
+
+  if (window.L) {
+    map = L.map("map").setView([20, 0], 2);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors'
+    }).addTo(map);
+    $("mapStatus").textContent = "Map ready. Register a drone and save coordinates to add a marker.";
+  } else {
+    $("mapStatus").textContent = "Map library did not load. Check your internet connection.";
+  }
+  refreshDrones();
+})();
+</script>
+</body>
+</html>
